@@ -1,14 +1,56 @@
-name: Build ShowHideOpen
+name: Build (portable EXE)
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # Manual trigger in the Actions tab
+  workflow_dispatch:
+    inputs:
+      rid:
+        description: "Runtime Identifier"
+        required: true
+        default: "win-x64"
+        type: choice
+        options:
+          - win-x64
+          - win-arm64
+      configuration:
+        description: "Build configuration"
+        required: true
+        default: "Release"
+        type: choice
+        options:
+          - Release
+          - Debug
+      trim:
+        description: "PublishTrimmed (advanced; may break reflection-heavy apps)"
+        required: true
+        default: "false"
+        type: choice
+        options: [ "false", "true" ]
+      r2r:
+        description: "PublishReadyToRun (bigger file, faster startup)"
+        required: true
+        default: "false"
+        type: choice
+        options: [ "false", "true" ]
 
 jobs:
   build:
     runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: pwsh
+
+    env:
+      # Defaults for normal CI (push/PR). Overridden by workflow_dispatch inputs if provided.
+      RID: ${{ github.event.inputs.rid || 'win-x64' }}
+      CONFIGURATION: ${{ github.event.inputs.configuration || 'Release' }}
+      PUBLISH_TRIMMED: ${{ github.event.inputs.trim || 'false' }}
+      PUBLISH_R2R: ${{ github.event.inputs.r2r || 'false' }}
 
     steps:
       - name: Checkout
@@ -17,46 +59,42 @@ jobs:
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'   # matches net8.0-windows
+          dotnet-version: '8.0.x'
 
       - name: Restore
         working-directory: src/ShowHideOpen
         run: dotnet restore
 
-      - name: Build (Release)
+      - name: Publish portable single-file EXE
         working-directory: src/ShowHideOpen
-        run: dotnet build -c Release --no-restore
+        run: >
+          dotnet publish
+          -c $env:CONFIGURATION
+          -r $env:RID
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:PublishTrimmed=$env:PUBLISH_TRIMMED
+          -p:PublishReadyToRun=$env:PUBLISH_R2R
+          -p:DebugType=None
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          --nologo
 
-      - name: Publish framework-dependent (win-x64)
-        working-directory: src/ShowHideOpen
-        run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true --no-self-contained
-
-      - name: Publish self-contained (win-x64)
-        working-directory: src/ShowHideOpen
-        run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true --self-contained true
-
-      - name: Capture artifacts
+      - name: Collect artifact (rename neatly)
         run: |
-          mkdir artifacts
-          robocopy src\ShowHideOpen\bin\Release\net8.0-windows artifacts\framework /e
-          robocopy src\ShowHideOpen\bin\Release\net8.0-windows\win-x64\publish artifacts\publish-fdd /e
-          robocopy src\ShowHideOpen\bin\Release\net8.0-windows\win-x64\publish artifacts\publish-scd /e
-          exit 0
+          $rid = "${{ env.RID }}"
+          $cfg = "${{ env.CONFIGURATION }}"
+          $pubDir = "src/ShowHideOpen/bin/$cfg/net8.0-windows/$rid/publish"
+          $exe = Get-ChildItem $pubDir -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "No EXE found in $pubDir" }
+          New-Item -ItemType Directory -Path artifacts | Out-Null
+          Copy-Item $exe.FullName "artifacts/ShowHideOpen-${rid}.exe"
+          # Optional: include README/license alongside the exe (comment out if not needed)
+          if (Test-Path .\README.md) { Copy-Item .\README.md artifacts\ }
+          if (Test-Path .\LICENSE)   { Copy-Item .\LICENSE   artifacts\ }
 
-      - name: Upload artifacts (framework build)
+      - name: Upload portable EXE
         uses: actions/upload-artifact@v4
         with:
-          name: ShowHideOpen-framework
-          path: artifacts/framework
-
-      - name: Upload artifacts (publish framework-dependent)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ShowHideOpen-publish-fdd-win-x64
-          path: artifacts/publish-fdd
-
-      - name: Upload artifacts (publish self-contained)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ShowHideOpen-publish-scd-win-x64
-          path: artifacts/publish-scd
+          name: ShowHideOpen-${{ env.RID }}
+          path: artifacts
