@@ -1,0 +1,62 @@
+name: Build ShowHideOpen
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'   # matches net8.0-windows
+
+      - name: Restore
+        working-directory: src/ShowHideOpen
+        run: dotnet restore
+
+      - name: Build (Release)
+        working-directory: src/ShowHideOpen
+        run: dotnet build -c Release --no-restore
+
+      - name: Publish framework-dependent (win-x64)
+        working-directory: src/ShowHideOpen
+        run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true --no-self-contained
+
+      - name: Publish self-contained (win-x64)
+        working-directory: src/ShowHideOpen
+        run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true --self-contained true
+
+      - name: Capture artifacts
+        run: |
+          mkdir artifacts
+          robocopy src\ShowHideOpen\bin\Release\net8.0-windows artifacts\framework /e
+          robocopy src\ShowHideOpen\bin\Release\net8.0-windows\win-x64\publish artifacts\publish-fdd /e
+          robocopy src\ShowHideOpen\bin\Release\net8.0-windows\win-x64\publish artifacts\publish-scd /e
+          exit 0
+
+      - name: Upload artifacts (framework build)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShowHideOpen-framework
+          path: artifacts/framework
+
+      - name: Upload artifacts (publish framework-dependent)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShowHideOpen-publish-fdd-win-x64
+          path: artifacts/publish-fdd
+
+      - name: Upload artifacts (publish self-contained)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShowHideOpen-publish-scd-win-x64
+          path: artifacts/publish-scd
